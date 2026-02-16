@@ -56,6 +56,7 @@ app.add_middleware(
 
 class ReelRequest(BaseModel):
     url: str
+    cookies: str | None = None
 
     @field_validator("url")
     @classmethod
@@ -82,14 +83,39 @@ class ReelInfo(BaseModel):
 
 def _base_yt_dlp_opts() -> dict:
     """Return yt-dlp options shared across endpoints."""
-    opts: dict = {
+    return {
         "format": "best[ext=mp4]/best",
         "quiet": True,
         "no_warnings": True,
     }
+
+
+def _write_temp_cookies(cookies_str: str) -> str:
+    """Write cookie string to a temp file and return its path."""
+    fd, path = tempfile.mkstemp(suffix=".txt", prefix="cookies_")
+    with os.fdopen(fd, "w") as f:
+        f.write(cookies_str)
+    return path
+
+
+def _apply_cookies(opts: dict, cookies: str | None) -> str | None:
+    """Add cookie file to yt-dlp opts. Returns temp file path to clean up, or None."""
+    if cookies:
+        tmp_path = _write_temp_cookies(cookies)
+        opts["cookiefile"] = tmp_path
+        return tmp_path
     if COOKIES_FILE.exists():
         opts["cookiefile"] = str(COOKIES_FILE)
-    return opts
+    return None
+
+
+def _cleanup(path: str | None) -> None:
+    """Remove a temporary file if it exists."""
+    if path and os.path.isfile(path):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +131,7 @@ async def root():
 async def get_reel_info(request: ReelRequest):
     """Extract metadata for an Instagram Reel without downloading it."""
     opts = _base_yt_dlp_opts()
+    tmp_cookie = _apply_cookies(opts, request.cookies)
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -119,6 +146,8 @@ async def get_reel_info(request: ReelRequest):
         raise HTTPException(status_code=404, detail=f"Could not fetch reel: {detail}")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {exc}")
+    finally:
+        _cleanup(tmp_cookie)
 
     return ReelInfo(
         title=info.get("title") or info.get("fulltitle"),
@@ -137,6 +166,7 @@ async def download_reel(request: ReelRequest):
 
     opts = _base_yt_dlp_opts()
     opts["outtmpl"] = output_template
+    tmp_cookie = _apply_cookies(opts, request.cookies)
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -151,6 +181,8 @@ async def download_reel(request: ReelRequest):
         raise HTTPException(status_code=404, detail=f"Could not fetch reel: {detail}")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {exc}")
+    finally:
+        _cleanup(tmp_cookie)
 
     video_id = info.get("id", "reel")
     ext = info.get("ext", "mp4")
