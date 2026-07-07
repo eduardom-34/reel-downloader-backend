@@ -1,0 +1,14 @@
+venv/
+__pycache__/
+*.pyc
+.env
+cookies.txt
+*.mp4
+*.tmp
+.idea/
+.vscode/
+.git/
+.gitignore
+Dockerfile
+.dockerignore
+README.md
