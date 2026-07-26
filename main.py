@@ -101,9 +101,16 @@ def _write_temp_cookies(cookies_str: str) -> str:
 def _apply_cookies(opts: dict, cookies: str | None) -> str | None:
     """Add cookie file to yt-dlp opts. Returns temp file path to clean up, or None."""
     if cookies:
+        looks_netscape = cookies.lstrip().startswith("# Netscape") or "\t" in cookies
+        cookie_names = [pair.split("=", 1)[0].strip() for pair in cookies.split(";") if "=" in pair]
+        logger.info(
+            "cookies received: %d chars, netscape_format=%s, names=%s",
+            len(cookies), looks_netscape, cookie_names[:10],
+        )
         tmp_path = _write_temp_cookies(cookies)
         opts["cookiefile"] = tmp_path
         return tmp_path
+    logger.info("cookies received: none (request.cookies was empty/null)")
     if COOKIES_FILE.exists():
         opts["cookiefile"] = str(COOKIES_FILE)
     return None
