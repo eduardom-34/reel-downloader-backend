@@ -87,12 +87,39 @@ class ReelInfo(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
+class _YtDlpLogger:
+    """Routes yt-dlp's internal diagnostics into our logger.
+
+    With quiet=True and no_warnings=True but no logger set, yt-dlp swallows
+    every intermediate warning it emits while probing Instagram (missing
+    csrftoken, the direct sessionid API call failing with its real HTTP
+    status, "Instagram API is not granting access", etc.) — exactly the
+    detail needed to tell "cookies invalid" apart from "IP/session flagged
+    by Instagram" apart from "post genuinely private". Setting this logger
+    makes yt-dlp forward everything here instead of discarding it, and it
+    bypasses no_warnings/quiet entirely (see YoutubeDL.report_warning).
+    """
+
+    def debug(self, msg: str) -> None:
+        logger.info("yt-dlp: %s", msg)
+
+    def info(self, msg: str) -> None:
+        logger.info("yt-dlp: %s", msg)
+
+    def warning(self, msg: str) -> None:
+        logger.warning("yt-dlp: %s", msg)
+
+    def error(self, msg: str) -> None:
+        logger.error("yt-dlp: %s", msg)
+
+
 def _base_yt_dlp_opts() -> dict:
     """Return yt-dlp options shared across endpoints."""
     return {
         "format": "best[ext=mp4]/best",
         "quiet": True,
         "no_warnings": True,
+        "logger": _YtDlpLogger(),
     }
 
 
@@ -103,6 +130,12 @@ DEFAULT_EXPIRY = 2145916800  # 2038-01-01
 
 # Cookies Instagram actually needs for an authenticated request.
 REQUIRED_COOKIES = {"sessionid"}
+
+# Not strictly required (the direct sessionid API call can succeed without
+# it), but if that call fails/expires mid-session, yt-dlp falls back to a
+# GraphQL request that needs csrftoken — without it that fallback silently
+# degrades to "login required" even though sessionid looked fine.
+RECOMMENDED_COOKIES = {"sessionid", "csrftoken"}
 
 
 def _netscape_line(
@@ -233,6 +266,16 @@ def _normalize_cookies(cookies: str) -> tuple[str, list[str]]:
             ", ".join(sorted(missing)),
         )
 
+    missing_recommended = (RECOMMENDED_COOKIES - set(names)) - missing
+    if missing_recommended:
+        logger.warning(
+            "cookies are missing %s — sessionid is present, but if Instagram's "
+            "direct media-info call rejects it (expired/flagged session), the "
+            "GraphQL fallback needs this cookie too and will otherwise report "
+            "'login required' even though sessionid looked valid.",
+            ", ".join(sorted(missing_recommended)),
+        )
+
     return NETSCAPE_HEADER + "\n".join(lines) + "\n", names
 
 
@@ -324,6 +367,7 @@ async def root():
 @app.post("/info", response_model=ReelInfo)
 async def get_reel_info(request: ReelRequest):
     """Extract metadata for an Instagram Reel without downloading it."""
+    logger.info("/info request: url=%s", request.url)
     opts = _base_yt_dlp_opts()
     tmp_cookie = _apply_cookies(opts, request.cookies)
 
@@ -351,6 +395,7 @@ async def get_reel_info(request: ReelRequest):
 @app.post("/download")
 async def download_reel(request: ReelRequest):
     """Download an Instagram Reel and stream the MP4 file back."""
+    logger.info("/download request: url=%s", request.url)
     opts = _base_yt_dlp_opts()
     tmp_cookie = _apply_cookies(opts, request.cookies)
 
